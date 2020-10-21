@@ -42,6 +42,30 @@
 
 #include <stdbool.h>
 
+
+#include "ucglib_hal.h"
+
+static ucg_t m_ucg;
+
+int display_init() {
+
+	ucg_Init(&m_ucg, ucg_dev_ic_ssd1331_18, ucg_ext_ssd1331_18,
+			ucg_com_stm32f1);
+
+	// Our screen is 132x162 in stead of 128x160
+	//ucg_Init(&m_ucg, ucg_dev_st7735_18x132x162, ucg_ext_st7735_18, ucg_com_nrfx);
+
+	ucg_SetFontMode(&m_ucg, UCG_FONT_MODE_TRANSPARENT);
+
+	// Well... it seems the display renders the speed-o-meter with an offset
+	// once the rotation is enabled...
+	ucg_SetRotate180(&m_ucg);
+
+	ucg_ClearScreen(&m_ucg);
+
+}
+
+
 volatile bool updateLEDs = false;
 volatile int updateVALs[2];
 
@@ -125,12 +149,12 @@ int qdec_init() {
 	__HAL_RCC_GPIOB_CLK_ENABLE();
 
 	TIM_Encoder_InitTypeDef encoderConfig = { 0 };
-	encoderConfig.EncoderMode = TIM_ENCODERMODE_TI2;
+	encoderConfig.EncoderMode = TIM_ENCODERMODE_TI1;//TIM_ENCODERMODE_TI12;
 
-	encoderConfig.IC1Filter = 0x08;//0x00;
+	encoderConfig.IC1Filter = 0xF;
 	encoderConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
 	encoderConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-	encoderConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
+	encoderConfig.IC1Selection = TIM_ICSELECTION_INDIRECTTI;//TIM_ICSELECTION_DIRECTTI;
 
 	encoderConfig.IC2Filter = encoderConfig.IC1Filter;
 	encoderConfig.IC2Polarity = encoderConfig.IC1Polarity;
@@ -138,7 +162,7 @@ int qdec_init() {
 	encoderConfig.IC2Selection = encoderConfig.IC1Selection;
 
 	hTim1.Instance = TIM1;
-	hTim1.Init.Period = 0xFF;
+	hTim1.Init.Period = 0xFFFF;
 
 	HAL_TIM_Encoder_Init(&hTim1, &encoderConfig);
 
@@ -147,25 +171,22 @@ int qdec_init() {
 	// Common configuration for all channels
 	GPIO_InitStruct.Mode = GPIO_MODE_AF_INPUT;
 	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
 
 	GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-	//HAL_TIM_Encoder_Start_IT(&hTim1, TIM_CHANNEL_ALL);
 	HAL_TIM_Encoder_Start_IT(&hTim1, TIM_CHANNEL_1);
-
-
 	NVIC_EnableIRQ(TIM1_CC_IRQn);
 
+
 	hTim4.Instance = TIM4;
-	hTim1.Init.Period = 0xFF;
+	hTim4.Init.Period = 0xFFFF;
 	HAL_TIM_Encoder_Init(&hTim4, &encoderConfig);
 
 	GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
 	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-	//HAL_TIM_Encoder_Start_IT(&hTim4, TIM_CHANNEL_ALL);
 	HAL_TIM_Encoder_Start_IT(&hTim4, TIM_CHANNEL_1);
 
 	NVIC_EnableIRQ(TIM4_IRQn);
@@ -186,6 +207,7 @@ int btn_init(void) {
 	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
 	NVIC_EnableIRQ(EXTI15_10_IRQn);
+	NVIC_EnableIRQ(EXTI9_5_IRQn);
 }
 
 void TIM1_CC_IRQHandler() {
@@ -196,9 +218,29 @@ void TIM4_IRQHandler() {
 	HAL_TIM_IRQHandler(&hTim4);
 }
 
+void EXTI9_5_IRQHandler(void) {
+	bool btnBrightness = __HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_8);
+	__HAL_GPIO_EXTI_CLEAR_FLAG(GPIO_PIN_All);
+
+
+	if (btnBrightness) {
+		for (int i = 1 ; i <= 4; i++)
+			if (updateVALs[1] < (i*PERIOD/4)) {
+				updateVALs[1] = (i*PERIOD/4);
+				updateLEDs = true;
+				return;
+			}
+		if (updateVALs[1] == PERIOD) {
+			updateVALs[1] = 0;
+			updateLEDs = true;
+		}
+	}
+
+}
+
 void EXTI15_10_IRQHandler(void){
 
-	bool btnBrightness = __HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_8);
+
 	bool btnColour =  __HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_10);
 	__HAL_GPIO_EXTI_CLEAR_FLAG(GPIO_PIN_All);
 
@@ -214,19 +256,6 @@ void EXTI15_10_IRQHandler(void){
 			updateLEDs = true;
 		}
 
-	}
-
-	if (btnBrightness) {
-		for (int i = 1 ; i <= 4; i++)
-			if (updateVALs[1] < (i*PERIOD/4)) {
-				updateVALs[1] = (i*PERIOD/4);
-				updateLEDs = true;
-				return;
-			}
-		if (updateVALs[1] == PERIOD) {
-			updateVALs[1] = 0;
-			updateLEDs = true;
-		}
 	}
 
 }
@@ -268,12 +297,16 @@ void applyLEDS(int colour, int brightness) {
 
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	int8_t val = htim->Instance->CNT;
+	int16_t val = htim->Instance->CNT;
+
 	if (val)
 		htim->Instance->CNT = 0;
 	else
 		return;
 	__DSB();
+#ifdef SEMI
+	printf("%d\n",val);
+#endif
 
 	int *pval = NULL;
 	switch ((int) htim->Instance) {
@@ -297,17 +330,29 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 }
 
 int main() {
+#ifdef SEMI
+	initialise_monitor_handles();
+	printf("Hello world!\n");
+#endif
 	HAL_Init();
 	SystemClock_Config();
 	SystemCoreClockUpdate();
+
+	qdec_init();
+	btn_init();
+
 
 	ws2812_init();
 	while (ws2812_is_busy());
 
 	applyLEDS(0x7F,0xFF);
-
-	qdec_init();
-	//btn_init();
+	//display_init();
+/*
+	ucg_SetFont(&m_ucg, ucg_font_5x8_8r);
+	ucg_SetFontMode(&m_ucg, UCG_FONT_MODE_TRANSPARENT);
+	ucg_SetColor(&m_ucg, 0, 0xFF, 0x00, 0x00);
+	ucg_DrawString(&m_ucg, 8, 8, 0, "Hello World!");
+*/
 
 	int val;
 	while (1) {
