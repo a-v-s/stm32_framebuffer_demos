@@ -28,305 +28,29 @@
 
  */
 
-/*
- * WS2812 DMA library demo for STM32F1 (STM32CubeF1 library)
- */
-
-
 #define PERIOD (0x3F)
 
-#include "stm32f1xx.h"
-#include "stm32f1xx_hal.h"
-#include "stm32f1xx_hal_gpio.h"
-#include "stm32f1xx_hal_rcc.h"
+#include "stm32f4xx.h"
 
 #include <stdbool.h>
 
+#include "graphics.h"
 
-#include "ucglib_hal.h"
-
-static ucg_t m_ucg;
-
-int display_init() {
-
-	ucg_Init(&m_ucg, ucg_dev_ic_ssd1331_18, ucg_ext_ssd1331_18,
-			ucg_com_stm32f1);
-
-	// Our screen is 132x162 in stead of 128x160
-	//ucg_Init(&m_ucg, ucg_dev_st7735_18x132x162, ucg_ext_st7735_18, ucg_com_nrfx);
-
-	ucg_SetFontMode(&m_ucg, UCG_FONT_MODE_TRANSPARENT);
-
-	// Well... it seems the display renders the speed-o-meter with an offset
-	// once the rotation is enabled...
-	ucg_SetRotate180(&m_ucg);
-
-	ucg_ClearScreen(&m_ucg);
-
+void Error_Handler() {
+	__BKPT(0);
 }
 
 
-volatile bool updateLEDs = false;
-volatile int updateVALs[2];
 
+void SystemClock_Config() {
+	//SystemClock_HSE25_OUT84_Config();
+	//SystemClock_HSI_OUT84_Config();
 
-/**
- * @brief  System Clock Configuration
- *         The system Clock is configured as follow :
- *            System Clock source            = PLL (HSE)
- *            SYSCLK(Hz)                     = 72000000
- *            HCLK(Hz)                       = 72000000
- *            AHB Prescaler                  = 1
- *            APB1 Prescaler                 = 2
- *            APB2 Prescaler                 = 1
- *            HSE Frequency(Hz)              = 8000000
- *            HSE PREDIV1                    = 1
- *            PLLMUL                         = 9
- *            Flash Latency(WS)              = 2
- * @param  None
- * @retval None
- */
-void SystemClock_Config(void) {
-	RCC_ClkInitTypeDef clkinitstruct = { 0 };
-	RCC_OscInitTypeDef oscinitstruct = { 0 };
-	RCC_PeriphCLKInitTypeDef rccperiphclkinit = { 0 };
-
-	/* Enable HSE Oscillator and activate PLL with HSE as source */
-	oscinitstruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-	oscinitstruct.HSEState = RCC_HSE_ON;
-	oscinitstruct.HSEPredivValue = RCC_HSE_PREDIV_DIV1;
-	oscinitstruct.PLL.PLLMUL = RCC_PLL_MUL9;
-
-	oscinitstruct.PLL.PLLState = RCC_PLL_ON;
-	oscinitstruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-
-	if (HAL_RCC_OscConfig(&oscinitstruct) != HAL_OK) {
-		/* Start Conversation Error */
-		//Error_Handler();
-	}
-
-	/* USB clock selection */
-	rccperiphclkinit.PeriphClockSelection = RCC_PERIPHCLK_USB;
-	rccperiphclkinit.UsbClockSelection = RCC_USBCLKSOURCE_PLL_DIV1_5;
-	HAL_RCCEx_PeriphCLKConfig(&rccperiphclkinit);
-
-	/* Select PLL as system clock source and configure the HCLK, PCLK1 and PCLK2
-	 clocks dividers */
-	clkinitstruct.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK
-			| RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2);
-	clkinitstruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
-	clkinitstruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-	clkinitstruct.APB1CLKDivider = RCC_HCLK_DIV2;
-	clkinitstruct.APB2CLKDivider = RCC_HCLK_DIV1;
-	if (HAL_RCC_ClockConfig(&clkinitstruct, FLASH_LATENCY_2) != HAL_OK) {
-		/* Start Conversation Error */
-		//Error_Handler();
-	}
-}
-
-void delay_ms(uint32_t ms) {
-	HAL_Delay(ms);
+	SystemClock_HSE25_OUT96_Config();
 }
 
 void SysTick_Handler() {
 	HAL_IncTick();
-}
-
-static TIM_HandleTypeDef hTim4 = { 0 };
-static TIM_HandleTypeDef hTim1 = { 0 };
-int qdec_init() {
-
-	// Enable Timer 1 Clock
-	__HAL_RCC_TIM1_CLK_ENABLE();
-
-	// Enable Timer 4 Clock
-	__HAL_RCC_TIM4_CLK_ENABLE();
-
-	// Enable GPIO Port A Clock
-	__HAL_RCC_GPIOA_CLK_ENABLE();
-
-	// Enable GPIO Port B Clock
-	__HAL_RCC_GPIOB_CLK_ENABLE();
-
-	TIM_Encoder_InitTypeDef encoderConfig = { 0 };
-	encoderConfig.EncoderMode = TIM_ENCODERMODE_TI1;//TIM_ENCODERMODE_TI12;
-
-	encoderConfig.IC1Filter = 0xF;
-	encoderConfig.IC1Polarity = TIM_ICPOLARITY_FALLING;
-	encoderConfig.IC1Prescaler = TIM_ICPSC_DIV1;
-	encoderConfig.IC1Selection = TIM_ICSELECTION_INDIRECTTI;//TIM_ICSELECTION_DIRECTTI;
-
-	encoderConfig.IC2Filter = encoderConfig.IC1Filter;
-	encoderConfig.IC2Polarity = encoderConfig.IC1Polarity;
-	encoderConfig.IC2Prescaler = encoderConfig.IC1Prescaler;
-	encoderConfig.IC2Selection = encoderConfig.IC1Selection;
-
-	hTim1.Instance = TIM1;
-	hTim1.Init.Period = 0xFFFF;
-
-	HAL_TIM_Encoder_Init(&hTim1, &encoderConfig);
-
-	GPIO_InitTypeDef GPIO_InitStruct;
-
-	// Common configuration for all channels
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_INPUT;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-
-	GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-	HAL_TIM_Encoder_Start_IT(&hTim1, TIM_CHANNEL_1);
-	NVIC_EnableIRQ(TIM1_CC_IRQn);
-
-
-	hTim4.Instance = TIM4;
-	hTim4.Init.Period = 0xFFFF;
-	HAL_TIM_Encoder_Init(&hTim4, &encoderConfig);
-
-	GPIO_InitStruct.Pin = GPIO_PIN_6 | GPIO_PIN_7;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-	HAL_TIM_Encoder_Start_IT(&hTim4, TIM_CHANNEL_1);
-
-	NVIC_EnableIRQ(TIM4_IRQn);
-
-}
-
-int btn_init(void) {
-	GPIO_InitTypeDef GPIO_InitStruct;
-	// Common configuration for all channels
-	GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
-	GPIO_InitStruct.Pull = GPIO_PULLUP;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-
-	GPIO_InitStruct.Pin = GPIO_PIN_10;
-	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-	GPIO_InitStruct.Pin = GPIO_PIN_8;
-	HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-	NVIC_EnableIRQ(EXTI15_10_IRQn);
-	NVIC_EnableIRQ(EXTI9_5_IRQn);
-}
-
-void TIM1_CC_IRQHandler() {
-	HAL_TIM_IRQHandler(&hTim1);
-}
-
-void TIM4_IRQHandler() {
-	HAL_TIM_IRQHandler(&hTim4);
-}
-
-void EXTI9_5_IRQHandler(void) {
-	bool btnBrightness = __HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_8);
-	__HAL_GPIO_EXTI_CLEAR_FLAG(GPIO_PIN_All);
-
-
-	if (btnBrightness) {
-		for (int i = 1 ; i <= 4; i++)
-			if (updateVALs[1] < (i*PERIOD/4)) {
-				updateVALs[1] = (i*PERIOD/4);
-				updateLEDs = true;
-				return;
-			}
-		if (updateVALs[1] == PERIOD) {
-			updateVALs[1] = 0;
-			updateLEDs = true;
-		}
-	}
-
-}
-
-void EXTI15_10_IRQHandler(void){
-
-
-	bool btnColour =  __HAL_GPIO_EXTI_GET_FLAG(GPIO_PIN_10);
-	__HAL_GPIO_EXTI_CLEAR_FLAG(GPIO_PIN_All);
-
-	if (btnColour) {
-		for (int i = 1 ; i <= 4; i++)
-			if (updateVALs[0] < (i*PERIOD/4)) {
-				updateVALs[0] = (i*PERIOD/4);
-				updateLEDs = true;
-				return;
-			}
-		if (updateVALs[0] == PERIOD) {
-			updateVALs[0] = 0;
-			updateLEDs = true;
-		}
-
-	}
-
-}
-
-void convertColour(int colour,uint8_t * wwa){
-	uint8_t *a = wwa+1;
-	uint8_t *w = wwa + 2;
-	uint8_t *c = wwa + 0;
-	float m = (float) (colour & 0x7F) / (float) 0x7F;
-	if (colour & 0x80) {
-		*a = 0;
-		*c = m * (float) 0xFF;
-		*w = 0xFF - *c;
-	} else {
-		*c = 0;
-		*w = m * (float) 0xFF;
-		*a = 0xFF - *w;
-	}
-}
-
-void applyLEDS(int colour, int brightness) {
-	uint8_t wwa[3];
-	convertColour(colour,wwa);
-
-	wwa[0] = (float) brightness / (float) 0xFF * (float) wwa[0];
-	wwa[1] = (float) brightness / (float) 0xFF * (float) wwa[1];
-	wwa[2] = (float) brightness / (float) 0xFF * (float) wwa[2];
-
-	// using 35 leds
-	for (int i = 0; i < 35; i++)
-		ws2812_fill_buffer_decompress(3*i, 3, wwa);
-	//while (ws2812_is_busy());
-	//ws2812_apply(3*35);
-	ws2812_apply_channel(3*35, 0);
-	while (ws2812_is_busy());
-	ws2812_apply_channel(3*35, 1);
-	while (ws2812_is_busy());
-}
-
-
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
-	int16_t val = htim->Instance->CNT;
-
-	if (val)
-		htim->Instance->CNT = 0;
-	else
-		return;
-	__DSB();
-#ifdef SEMI
-	printf("%d\n",val);
-#endif
-
-	int *pval = NULL;
-	switch ((int) htim->Instance) {
-	case (int) TIM1:
-		pval = updateVALs;
-		break;
-	case (int) TIM4:
-		pval = updateVALs + 1;
-		break;
-	default:
-		return;
-	}
-	int newval = *pval + val;
-
-	if (newval > PERIOD) newval = PERIOD;
-	if (newval < 0 ) newval = 0;
-	*pval = newval;
-
-	updateLEDs = true;
-	//applyLEDS(updateVALs[0]<<2, updateVALs[1]<<2);
 }
 
 int main() {
@@ -338,27 +62,54 @@ int main() {
 	SystemClock_Config();
 	SystemCoreClockUpdate();
 
-	qdec_init();
-	btn_init();
+	display_init();
+	set_565();
 
-
-	ws2812_init();
-	while (ws2812_is_busy());
-
-	applyLEDS(0x7F,0xFF);
-	//display_init();
-/*
-	ucg_SetFont(&m_ucg, ucg_font_5x8_8r);
-	ucg_SetFontMode(&m_ucg, UCG_FONT_MODE_TRANSPARENT);
-	ucg_SetColor(&m_ucg, 0, 0xFF, 0x00, 0x00);
-	ucg_DrawString(&m_ucg, 8, 8, 0, "Hello World!");
-*/
-
-	int val;
+	int framecount = 0;
+	int fps = 0;
+	int lastTick = HAL_GetTick();
 	while (1) {
-		if (updateLEDs) {
-			updateLEDs = false;
-			applyLEDS(updateVALs[0]<<2, updateVALs[1]<<2);
+
+		for (int y = 0; y < 32; y++) {
+
+			draw_background();
+			draw_test();
+			//draw_plain_background();
+			draw_image(sheep, 0, y);
+			//draw_image(itph, 0, y);
+			print_fps(fps);
+
+			// Plane background + sheep
+			// -O0 13 fps @ 84 MHz
+			// -O2 28 fps @ 84 MHz / 32 fps @ 100 MHz
+			// -Os 24 fps @ 84 MHz
+
+
+			framebuffer_apply();
+			framecount++;
+			if ((HAL_GetTick() - lastTick) > 1000) {
+				fps = framecount;
+				framecount = 0;
+				lastTick = HAL_GetTick();
+			}
 		}
-	};;
+
+		for (int y = 31; y; y--) {
+			draw_background();
+			draw_test();
+			//draw_plain_background();
+			draw_image(sheep, 0, y);
+			//draw_image(itph, 0, y);
+			print_fps(fps);
+			framebuffer_apply();
+			framecount++;
+			if ((HAL_GetTick() - lastTick) > 1000) {
+				fps = framecount;
+				framecount = 0;
+				lastTick = HAL_GetTick();
+			}
+		}
+
+	}
+
 }
