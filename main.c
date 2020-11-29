@@ -43,27 +43,7 @@
 #include <stdbool.h>
 
 
-#include "ucglib_hal.h"
 
-static ucg_t m_ucg;
-
-int display_init() {
-
-	ucg_Init(&m_ucg, ucg_dev_ic_ssd1331_18, ucg_ext_ssd1331_18,
-			ucg_com_stm32f1);
-
-	// Our screen is 132x162 in stead of 128x160
-	//ucg_Init(&m_ucg, ucg_dev_st7735_18x132x162, ucg_ext_st7735_18, ucg_com_nrfx);
-
-	ucg_SetFontMode(&m_ucg, UCG_FONT_MODE_TRANSPARENT);
-
-	// Well... it seems the display renders the speed-o-meter with an offset
-	// once the rotation is enabled...
-	ucg_SetRotate180(&m_ucg);
-
-	ucg_ClearScreen(&m_ucg);
-
-}
 
 
 volatile bool updateLEDs = false;
@@ -284,6 +264,8 @@ void applyLEDS(int colour, int brightness) {
 	wwa[1] = (float) brightness / (float) 0xFF * (float) wwa[1];
 	wwa[2] = (float) brightness / (float) 0xFF * (float) wwa[2];
 
+	//wwa[0]=wwa[1]=wwa[2]=255;
+
 	// using 35 leds
 	for (int i = 0; i < 35; i++)
 		ws2812_fill_buffer_decompress(3*i, 3, wwa);
@@ -329,6 +311,9 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim) {
 	//applyLEDS(updateVALs[0]<<2, updateVALs[1]<<2);
 }
 
+
+#include "graphics.h"
+
 int main() {
 #ifdef SEMI
 	initialise_monitor_handles();
@@ -342,23 +327,89 @@ int main() {
 	btn_init();
 
 
+	/*
 	ws2812_init();
 	while (ws2812_is_busy());
 
 	applyLEDS(0x7F,0xFF);
-	//display_init();
-/*
-	ucg_SetFont(&m_ucg, ucg_font_5x8_8r);
-	ucg_SetFontMode(&m_ucg, UCG_FONT_MODE_TRANSPARENT);
-	ucg_SetColor(&m_ucg, 0, 0xFF, 0x00, 0x00);
-	ucg_DrawString(&m_ucg, 8, 8, 0, "Hello World!");
-*/
+	*/
 
+	display_init();
+	set_565();
+
+
+	int framecount = 0;
+	int fps = 0;
+	int lastTick = HAL_GetTick();
+
+	int x=0; int dir=1;
+	while (1) {
+		if (dir) {
+			x++;
+			if (x > (96-64)) dir = 0;
+		} else {
+			x--;
+			if (!x) dir = 1;
+		}
+
+		//draw_plain_background();
+		draw_background();
+		draw_test();
+		draw_image(sheep, x, 0);
+		print_fps(fps);
+		framecount++;
+		if ((HAL_GetTick() - lastTick) > 1000) {
+			fps = framecount;
+			framecount = 0;
+			lastTick = HAL_GetTick();
+		}
+		framebuffer_apply();
+
+	}
+
+	/*
+	while (1) {
+		ucg_SetColor(&m_ucg, 0, 0xFF, 0x00, 0x00);
+		ucg_SetColor(&m_ucg, 1, 0xFF, 0x00, 0x00);
+		ucg_DrawBox(&m_ucg,0,0,96,64);
+		hello();
+		HAL_Delay(500);
+		ucg_SetColor(&m_ucg, 0, 0x00, 0xFF, 0x00);
+		ucg_SetColor(&m_ucg, 1, 0x00, 0xFF, 0x00);
+		ucg_DrawBox(&m_ucg,0,0,96,64);
+		hello();
+		HAL_Delay(500);
+		ucg_SetColor(&m_ucg, 0, 0x00, 0x00, 0xFF);
+		ucg_SetColor(&m_ucg, 1, 0x00, 0x00, 0xFF);
+		ucg_DrawBox(&m_ucg,0,0,96,64);
+		hello();
+		HAL_Delay(500);
+		ucg_SetColor(&m_ucg, 0, 0xFF, 0xFF, 0xFF);
+		ucg_SetColor(&m_ucg, 1, 0xFF, 0xFF, 0xFF);
+		ucg_DrawBox(&m_ucg,0,0,96,64);
+		hello();
+		HAL_Delay(500);
+		ucg_SetColor(&m_ucg, 0, 0x00, 0x00, 0x00);
+		ucg_SetColor(&m_ucg, 1, 0x00, 0x00, 0x00);
+		ucg_DrawBox(&m_ucg,0,0,96,64);
+		hello();
+		HAL_Delay(500);
+	}
+	*/
+
+
+	/*
 	int val;
 	while (1) {
+		updateLEDs = 1;
 		if (updateLEDs) {
 			updateLEDs = false;
 			applyLEDS(updateVALs[0]<<2, updateVALs[1]<<2);
+			char buff[32];
+			memset(buff,0,31);
+			//sprintf(buff,"%3d %3d", updateVALs[0],updateVALs[1]);
+			//ucg_DrawString(&m_ucg, 8, 16, 0, buff);
 		}
-	};;
+	};
+	*/
 }

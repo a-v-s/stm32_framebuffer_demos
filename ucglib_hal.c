@@ -36,8 +36,8 @@ int16_t ucg_com_stm32f1(ucg_t *ucg, int16_t msg, uint16_t arg, uint8_t *data) {
 			__HAL_RCC_GPIOA_CLK_ENABLE();
 
 			m_spi_handle.Init.Mode = SPI_MODE_MASTER;
-			//m_spi_handle.Init.Direction = SPI_DIRECTION_1LINE;
-			m_spi_handle.Init.Direction = SPI_DIRECTION_2LINES;
+			m_spi_handle.Init.Direction = SPI_DIRECTION_1LINE;
+			//m_spi_handle.Init.Direction = SPI_DIRECTION_2LINES;
 			m_spi_handle.Init.DataSize = SPI_DATASIZE_8BIT;
 
 			// I assume mode 0
@@ -47,8 +47,9 @@ int16_t ucg_com_stm32f1(ucg_t *ucg, int16_t msg, uint16_t arg, uint8_t *data) {
 			// The ucglib controls the line itself
 			m_spi_handle.Init.NSS = SPI_NSS_SOFT;
 
-			// Start slow for now... I'll have to look up the clock setup
-			m_spi_handle.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+			// We'll need to do speed calculations later
+			//m_spi_handle.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_32;
+			m_spi_handle.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_4;
 
 			// What is the default?
 			m_spi_handle.Init.FirstBit = SPI_FIRSTBIT_MSB;
@@ -61,7 +62,8 @@ int16_t ucg_com_stm32f1(ucg_t *ucg, int16_t msg, uint16_t arg, uint8_t *data) {
 
 			m_spi_handle.Instance = SPI1;
 
-			HAL_SPI_Init(&m_spi_handle);
+			int res = HAL_SPI_Init(&m_spi_handle);
+			if (res) __BKPT(0);
 
 			GPIO_InitTypeDef GPIO_InitStruct;
 
@@ -101,8 +103,12 @@ int16_t ucg_com_stm32f1(ucg_t *ucg, int16_t msg, uint16_t arg, uint8_t *data) {
 		/* "arg" microseconds. One microsecond is 0.000001 second */
 
 		// DONE
+		if (arg > 999)
+			HAL_Delay(arg / 1000); // unit of HAL_Delay????
 
-		HAL_Delay(arg); // unit of HAL_Delay????
+		else
+			for (int i = 0; i < arg * 72; i++)
+				__NOP();
 
 		break;
 	case UCG_COM_MSG_CHANGE_RESET_LINE:
@@ -135,28 +141,38 @@ int16_t ucg_com_stm32f1(ucg_t *ucg, int16_t msg, uint16_t arg, uint8_t *data) {
 					/* "arg" contains one byte, which should be sent to the display */
 					/* The current status of the CD line is available */
 					/* in bit 0 of u8g->com_status */
-					HAL_SPI_Transmit(&m_spi_handle, &arg, 1, 1000);
-
+				{
+					int res = HAL_SPI_Transmit(&m_spi_handle, &arg, 1, 1000);
+					if (res) __BKPT(0);
+				}
 					break;
 				case UCG_COM_MSG_REPEAT_1_BYTE:
 					/* "data[0]" contains one byte */
 					/* repeat sending the byte in data[0] "arg" times */
 					/* The current status of the CD line is available */
 					/* in bit 0 of u8g->com_status */
+					arg++;
+
 				{
-					uint8_t buff[arg];
+					uint8_t buff[arg+1];
 					memset(buff, data[0], arg);
-					HAL_SPI_Transmit(&m_spi_handle, buff, arg,
+					int res=HAL_SPI_Transmit(&m_spi_handle, buff, arg,
 							1000);
+					if (res) __BKPT(0);
 				}
 
 				break;
 				case UCG_COM_MSG_REPEAT_2_BYTES:
+
 					/* "data[0]" contains first byte */
 					/* "data[1]" contains second byte */
 					/* repeat sending the two bytes "arg" times */
 					/* The current status of the CD line is available */
 					/* in bit 0 of u8g->com_status */
+
+					//if (!arg) arg=1;//break; // we can get requests of 0 repeats?!?
+					arg++;
+
 				{
 					uint8_t buff[2 * arg];
 					for (int i = 0; i < arg; i++) {
@@ -164,8 +180,9 @@ int16_t ucg_com_stm32f1(ucg_t *ucg, int16_t msg, uint16_t arg, uint8_t *data) {
 						buff[2 * i + 1] = data[1];
 					}
 
-					HAL_SPI_Transmit(&m_spi_handle, buff, 2 * arg,
+					int res = HAL_SPI_Transmit(&m_spi_handle, buff, 2 * arg,
 							1000);
+					if (res) __BKPT(0);
 				}
 
 				break;
@@ -176,6 +193,8 @@ int16_t ucg_com_stm32f1(ucg_t *ucg, int16_t msg, uint16_t arg, uint8_t *data) {
 					/* repeat sending the three bytes "arg" times */
 					/* The current status of the CD line is available */
 					/* in bit 0 of u8g->com_status */
+					//if (!arg) arg=1;//break; // we can get a request for zero times ?!?!?
+					arg++;
 				{
 					uint8_t buff[3 * arg];
 					for (int i = 0; i < arg; i++) {
@@ -184,17 +203,20 @@ int16_t ucg_com_stm32f1(ucg_t *ucg, int16_t msg, uint16_t arg, uint8_t *data) {
 						buff[3 * i + 2] = data[2];
 					}
 
-					HAL_SPI_Transmit(&m_spi_handle, buff, 3 * arg,
+					int res = HAL_SPI_Transmit(&m_spi_handle, buff, 3 * arg,
 							1000);
+					if (res) __BKPT(0);
 				}
 
 				break;
 				case UCG_COM_MSG_SEND_STR:
 					/* "data" is an array with "arg" bytes */
 					/* send "arg" bytes to the display */
-
-				HAL_SPI_Transmit(&m_spi_handle, data,  arg,
+				{
+					int res = HAL_SPI_Transmit(&m_spi_handle, data,  arg,
 						1000);
+					if (res) __BKPT(0);
+				}
 				break;
 				case UCG_COM_MSG_SEND_CD_DATA_SEQUENCE:
 					/* "data" is a pointer to two bytes, which contain the cd line */
